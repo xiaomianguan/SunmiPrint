@@ -1,0 +1,14 @@
+# Build output
+build/
+
+# Signing material — never commit
+keystore/
+*.jks
+*.keystore
+*.pk8
+*.pem
+
+# Editor / OS cruft
+*.swp
+*~
+.DS_Store
