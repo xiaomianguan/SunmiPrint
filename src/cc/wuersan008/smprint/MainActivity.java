@@ -48,14 +48,21 @@ import dalvik.system.DexClassLoader;
  * newer builds have postPrintData() (and it has no printBitmapCustom()). Code
  * compiled against a downloaded AIDL therefore calls the wrong methods. Using the
  * device's own class removes that entire failure mode.
+ *
+ * The APK that holds that class is located through the PackageManager at runtime, so no
+ * firmware-specific path is assumed either.
  */
 public class MainActivity extends Activity {
 
     static final String TAG = "SunmiPrint";
     static final String SVC_PKG = "woyou.aidlservice.jiuiv5";
     static final String SVC_ACTION = "woyou.aidlservice.jiuiv5.IWoyouService";
-    static final String SVC_APK =
-        "/system/app/SunmiPrinterService_P1_3.1.6_release/SunmiPrinterService_P1_3.1.6_release.apk";
+
+    // The printer-service APK is located at runtime (see findServiceApk()): the firmware
+    // names its directory after its own version
+    // ("/system/app/SunmiPrinterService_P1_<ver>_release/..."), and an update can move the
+    // APK under /data/app, so no path may be hardcoded here.
+    String svcApk;
 
     static final int REQ_PICK = 1001;
     static final int PRINT_WIDTH = 384;   // P1 print head width in dots
@@ -213,11 +220,17 @@ public class MainActivity extends Activity {
 
     void loadInterface() {
         try {
+            svcApk = findServiceApk();
+            if (svcApk == null) {
+                post("printer service APK not found (package " + SVC_PKG + ")");
+                return;
+            }
+            Log.i(TAG, "printer service APK: " + svcApk);
             DexClassLoader dcl;
             try {
-                dcl = new DexClassLoader(SVC_APK, null, null, getClassLoader());
+                dcl = new DexClassLoader(svcApk, null, null, getClassLoader());
             } catch (Throwable t) {
-                dcl = new DexClassLoader(SVC_APK, getDir("dex", 0).getAbsolutePath(),
+                dcl = new DexClassLoader(svcApk, getDir("dex", 0).getAbsolutePath(),
                         null, getClassLoader());
             }
             svcIface = dcl.loadClass("woyou.aidlservice.jiuiv5.IWoyouService");
@@ -229,6 +242,65 @@ public class MainActivity extends Activity {
             Log.e(TAG, "loadInterface failed", t);
             post("LOAD FAILED: " + t);
         }
+    }
+
+    // ------------------------------------------------- printer service APK lookup
+
+    /**
+     * Find the APK that holds the printer service without assuming any path:
+     *   1. PackageManager knows where the package is installed - survives firmware renames
+     *      and moves the APK to /data/app when the service gets updated.
+     *   2. Otherwise resolve the service component and use the APK behind it.
+     *   3. Last resort: scan the usual system directories for a matching file name.
+     */
+    String findServiceApk() {
+        try {
+            android.content.pm.ApplicationInfo ai =
+                    getPackageManager().getApplicationInfo(SVC_PKG, 0);
+            if (ai != null && ai.sourceDir != null && new File(ai.sourceDir).isFile())
+                return ai.sourceDir;
+        } catch (Throwable t) {
+            Log.w(TAG, "getApplicationInfo(" + SVC_PKG + ") failed: " + t);
+        }
+        try {
+            Intent i = new Intent(SVC_ACTION);
+            i.setPackage(SVC_PKG);
+            android.content.pm.ResolveInfo ri = getPackageManager().resolveService(i, 0);
+            if (ri != null && ri.serviceInfo != null && ri.serviceInfo.applicationInfo != null
+                    && ri.serviceInfo.applicationInfo.sourceDir != null
+                    && new File(ri.serviceInfo.applicationInfo.sourceDir).isFile())
+                return ri.serviceInfo.applicationInfo.sourceDir;
+        } catch (Throwable t) {
+            Log.w(TAG, "resolveService failed: " + t);
+        }
+        String[] dirs = { "/system/app", "/system/priv-app", "/system/app-priv", "/data/app" };
+        for (String d : dirs) {
+            File f = scanForServiceApk(new File(d), 3);
+            if (f != null) {
+                Log.i(TAG, "printer service APK found by scanning " + d);
+                return f.getAbsolutePath();
+            }
+        }
+        return null;
+    }
+
+    /** Depth-limited scan for an APK whose file name looks like the printer service. */
+    static File scanForServiceApk(File dir, int depth) {
+        if (dir == null || depth < 0) return null;
+        File[] kids = dir.listFiles();
+        if (kids == null) return null;
+        for (File f : kids) {
+            String n = f.getName().toLowerCase(java.util.Locale.US);
+            if (f.isFile() && n.endsWith(".apk")
+                    && (n.contains("printerservice") || n.contains("jiuiv5")))
+                return f;
+        }
+        for (File f : kids)
+            if (f.isDirectory()) {
+                File r = scanForServiceApk(f, depth - 1);
+                if (r != null) return r;
+            }
+        return null;
     }
 
     void makeCallback() {

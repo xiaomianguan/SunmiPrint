@@ -31,6 +31,11 @@ then binds and calls methods by name through reflection, with an `ICallback` sup
 callbacks. This makes the app immune to AIDL version drift, and any method missing on a
 given firmware degrades to `n/a` instead of calling the wrong thing.
 
+The APK holding that class is found at runtime too — `getApplicationInfo(pkg)` →
+`resolveService()` → a depth-limited scan of `/system/app`, `/system/priv-app`, `/data/app`.
+Firmware renames (`SunmiPrinterService_P1_<version>_release`) or an update that moves the
+service to `/data/app` therefore cannot break it, and no path is compiled in.
+
 Verified on this device: `svc 3.1.6 | fw 1.24 | model POS-P1 | state 1`.
 
 ## Build
@@ -40,8 +45,33 @@ bash build.sh                 # -> build/SunmiPrint.apk
 KS=/path/to/platform.jks KS_ALIAS=platform bash build.sh   # optional custom key
 ```
 
-Needs `javac`/`keytool` (JDK 8 used here) plus Android SDK build-tools
-(`aapt2`, `d8`, `zipalign`, `apksigner`). Paths are set at the top of `build.sh`.
+Nothing is hardcoded — `build.sh` locates the toolchain itself and prints what it picked:
+
+```
+SunmiPrint build - autodetecting toolchain
+  JDK          /home/you/android-studio/jbr  (javac 17.0.10)
+  build-tools  /home/you/Android/Sdk/build-tools/36.0.0
+  android.jar  /home/you/Android/Sdk/platforms/android-34/android.jar
+  javac flags  -source 1.7 -target 1.7 -bootclasspath .../android.jar
+  zip          zip -q
+```
+
+* **JDK** — `$JDK_HOME`, else `javac` on `PATH`, else Android Studio's bundled `jbr`
+  (`~/android-studio/jbr`, `/opt/android-studio/jbr`, the macOS app bundle, …), else
+  `$JAVA_HOME`. Any JDK from 8 upward works: the script probes which `javac` flags that
+  generation accepts (`-source 1.7 -bootclasspath` on 8, `-source 8 -classpath` on newer)
+  and reports the choice.
+* **SDK** — `$SDK_ROOT` / `$ANDROID_HOME` / `$ANDROID_SDK_ROOT`, else the usual locations
+  (`~/Android/Sdk`, `~/Library/Android/sdk`, `/opt/android-sdk`, …). It picks the
+  **newest** build-tools that has all four tools and the **newest**
+  `platforms/android-*/android.jar`.
+* **Overrides** — `JDK_HOME`, `SDK_ROOT`, `BUILD_TOOLS`, `ANDROID_JAR`, plus `KS`,
+  `KS_ALIAS`, `KS_PASS` for signing. If no keystore exists, one is generated at
+  `keystore/ks.jks` (git-ignored).
+* Requirements: a JDK with `javac` + `keytool` (a bare JRE is not enough), Android SDK
+  build-tools plus one platform, and `zip` — which falls back to the JDK's `jar` if absent.
+  Missing pieces produce an error naming the `sdkmanager` package to install.
+
 Layout:
 
     SunmiPrint/
@@ -100,6 +130,7 @@ adb shell am start -n cc.wuersan008.smprint/.MainActivity -e path /sdcard/pic.pn
 ## Verified
 
 ```
+I SunmiPrint: printer service APK: /system/app/SunmiPrinterService_P1_3.1.6_release/SunmiPrinterService_P1_3.1.6_release.apk
 I SunmiPrint: interface loaded from device APK
 I SunmiPrint: connected to printer service
 I SunmiPrint: svc 3.1.6 | fw 1.24 | model POS-P1 | sn 32383448183635304631D96A | state 1
